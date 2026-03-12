@@ -576,6 +576,25 @@ class AcademicDocBuilder:
         # ─── Add superscript footnote reference in the body text ───────
         p_element = paragraph._p
 
+        # If there's already a footnoteReference in this paragraph, add a
+        # superscript comma separator first so Word renders ¹, ² not ¹²
+        existing_refs = p_element.findall(f".//{qn('w:footnoteReference')}")
+        if existing_refs:
+            sep_run = OxmlElement("w:r")
+            sep_rpr = OxmlElement("w:rPr")
+            sep_valign = OxmlElement("w:vertAlign")
+            sep_valign.set(qn("w:val"), "superscript")
+            sep_rpr.append(sep_valign)
+            sep_sz = OxmlElement("w:sz")
+            sep_sz.set(qn("w:val"), str(int(FONT_SIZE_BODY.pt * 2)))
+            sep_rpr.append(sep_sz)
+            sep_run.append(sep_rpr)
+            sep_t = OxmlElement("w:t")
+            sep_t.set(qn("xml:space"), "preserve")
+            sep_t.text = ", "
+            sep_run.append(sep_t)
+            p_element.append(sep_run)
+
         # Create run with footnoteReference + explicit superscript
         ref_run = OxmlElement("w:r")
         ref_rpr = OxmlElement("w:rPr")
