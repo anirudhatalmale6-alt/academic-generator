@@ -132,22 +132,22 @@ class GenerationPipeline:
 
         if toc_mode == "Manual" and toc_manual.strip():
             sections = parse_toc_input(toc_manual)
-        elif toc_mode in ("Automat din atașamente", "Manual + din atașamente") and uploaded_files:
-            # Extract TOC from uploaded files
-            extracted_toc = ""
-            for f in uploaded_files:
-                text = extract_guide_text(f)
-                # Try to find TOC-like structure
-                toc_match = re.search(r'(?:cuprins|table of contents|sommaire)(.*?)(?:\n\n|\Z)',
-                                     text, re.IGNORECASE | re.DOTALL)
-                if toc_match:
-                    extracted_toc = toc_match.group(1)
-                    break
-
-            if extracted_toc and toc_mode == "Automat din atașamente":
-                sections = parse_toc_input(extracted_toc)
-            elif toc_manual.strip():
+        elif toc_mode == "Manual + din atașamente":
+            # Priority: manual text first, then try to extract from uploads
+            if toc_manual.strip():
                 sections = parse_toc_input(toc_manual)
+            elif uploaded_files:
+                extracted = self._extract_toc_from_files(uploaded_files)
+                if extracted:
+                    sections = extracted
+                else:
+                    sections = self._auto_generate_toc(title, doc_type, language, page_count, provider_order)
+            else:
+                sections = self._auto_generate_toc(title, doc_type, language, page_count, provider_order)
+        elif toc_mode == "Automat din atașamente" and uploaded_files:
+            extracted = self._extract_toc_from_files(uploaded_files)
+            if extracted:
+                sections = extracted
             else:
                 sections = self._auto_generate_toc(title, doc_type, language, page_count, provider_order)
         elif toc_mode == "Automat":
@@ -320,7 +320,12 @@ class GenerationPipeline:
 
                 # Remove citation markers from text for clean paragraph
                 clean_text = CITATION_PATTERN.sub('', para_text).strip()
-                clean_text = re.sub(r'\s{2,}', ' ', clean_text)
+                # Also strip any remaining parenthetical citations the regex missed
+                clean_text = re.sub(
+                    r'\(\s*[A-ZÀ-Ž][a-zà-ž]+(?:[-\s][A-ZÀ-Ž]?[a-zà-ž]*)*.{0,30}?\d{4}.{0,10}?\)',
+                    '', clean_text,
+                )
+                clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
 
                 if not clean_text:
                     continue
@@ -328,14 +333,19 @@ class GenerationPipeline:
                 p = builder.doc.add_paragraph(clean_text)
                 builder._apply_body_format(p)
 
-                # Add footnotes using bibliography-aware formatter
-                for cit in citations:
-                    fn_text = fn_formatter.format(
-                        author=cit["author"],
-                        year=cit["year"],
-                        pages=cit["pages"],
-                    )
-                    builder.add_footnote(p, fn_text)
+                # Combine all citations into a single footnote per paragraph.
+                # Multiple sources are listed inside one footnote, separated by "; ".
+                if citations:
+                    fn_parts = []
+                    for cit in citations:
+                        fn_text = fn_formatter.format(
+                            author=cit["author"],
+                            year=cit["year"],
+                            pages=cit["pages"],
+                        )
+                        fn_parts.append(fn_text.rstrip("."))
+                    combined_fn = "; ".join(fn_parts) + "."
+                    builder.add_footnote(p, combined_fn)
 
         # Bibliography — strip markdown asterisks from entries
         clean_biblio = [re.sub(r'\*+([^*]+)\*+', r'\1', e) for e in biblio_entries]
@@ -387,6 +397,56 @@ class GenerationPipeline:
         from core.formatting import DEFAULT_CHAPTERS
         default = DEFAULT_CHAPTERS.get(doc_type, DEFAULT_CHAPTERS["licență"])
         return [{"title": ch, "level": 1} for ch in default]
+
+    def _extract_toc_from_files(self, files: list[Path]) -> list[dict]:
+        """Extract TOC/chapter structure from uploaded files.
+
+        Looks for chapter-like headings (Capitolul, Introducere, Concluzii, etc.)
+        line by line, rather than relying on finding a 'Cuprins' keyword.
+        """
+        chapter_pattern = re.compile(
+            r'^\s*(?:'
+            r'(?:Capitolul|Capitol)\s+[IVXLC\d]+[\s.–\-:]+.+'  # Capitolul I — ...
+            r'|Introducere.*'
+            r'|Concluzi[ie].*'
+            r'|Bibliografi[ea].*'
+            r'|Rezumat.*'
+            r'|Abstract.*'
+            r'|\d+\.\s+.+'  # 1. Title
+            r'|\d+\.\d+\.?\s+.+'  # 1.1 Subtitle
+            r')',
+            re.IGNORECASE,
+        )
+
+        for f in files:
+            text = extract_guide_text(f)
+            if not text:
+                continue
+
+            sections = []
+            for line in text.split("\n"):
+                line = line.rstrip()
+                if not line.strip():
+                    continue
+                if chapter_pattern.match(line.strip()):
+                    stripped = line.strip()
+                    # Determine level
+                    if re.match(r'^\d+\.\d+', stripped):
+                        level = 2
+                    elif re.match(r'^\t', line) or line.startswith("    "):
+                        level = 2
+                    else:
+                        level = 1
+                    # Clean title
+                    title = re.sub(r'^\d+[\.\)]\s*', '', stripped)
+                    title = title.strip()
+                    if title and len(title) > 3:
+                        sections.append({"title": title, "level": level})
+
+            if sections:
+                return sections
+
+        return []
 
     def _generate_bibliography(
         self, title, doc_type, language, min_sources, citation_style_name,
