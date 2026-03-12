@@ -148,12 +148,11 @@ def build_section_prompt(
     prompt = f"""Scrie conținut academic profesional în limba {language} pentru secțiunea '{section_name}'
 din lucrarea de {doc_type} intitulată '{title}'.
 
-LIMITĂ STRICTĂ DE LUNGIME (OBLIGATORIU):
-- EXACT {length['word_count']} cuvinte (±10%). NU DEPĂȘI această limită!
-- EXACT {length['paragraphs']} paragrafe, fiecare de {length['sentences_per_paragraph']} propoziții
+LUNGIME ȚINTĂ:
+- Aproximativ {length['word_count']} cuvinte ({length['paragraphs']} paragrafe de {length['sentences_per_paragraph']} propoziții)
 - Aceasta corespunde la aproximativ {length['estimated_pages']} pagini
 - Documentul total are {total_pages} pagini, iar aceasta este una din {total_sections} secțiuni
-- Dacă scrii mai mult de {int(length['word_count'] * 1.1)} cuvinte, textul va fi TRUNCHIAT
+- IMPORTANT: Termină FIECARE paragraf cu o propoziție completă. Nu lăsa propoziții neterminate!
 
 CERINȚE DE CITARE:
 - Include {target_citations} citări în format (Autor, An) sau (Autor, An, p. X)
@@ -174,7 +173,7 @@ INTERZIS:
 - Texte meta ("Voi prezenta...", "În această secțiune...")
 - Fabricarea de surse bibliografice
 - Copierea textului din ghiduri
-- Depășirea limitei de {length['word_count']} cuvinte
+- Propoziții incomplete sau paragrafe tăiate la mijloc
 {rules_text}
 {context_hint}"""
 

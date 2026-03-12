@@ -213,19 +213,12 @@ class GenerationPipeline:
                 previous_sections=[s["title"] for s in content_sections],
             )
 
-            # Calculate token budget based on target page count
-            from core.prompt_builder import calculate_section_length
-            sec_length = calculate_section_length(
-                section["title"], page_count, total_content, detail_level,
-            )
-            section_max_tokens = min(4096, sec_length.get("max_tokens", 4096))
-
             try:
                 text, provider_used = generate_text(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     provider_order=provider_order,
-                    max_tokens=section_max_tokens,
+                    max_tokens=4096,
                     temperature=0.7,
                 )
             except AIProviderError as e:
