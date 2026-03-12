@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+outputs/
+*.docx
+!citation_styles/
+!ghiduri_academice/
+registry.json
+.streamlit/
