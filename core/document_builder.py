@@ -289,80 +289,56 @@ class AcademicDocBuilder:
 
     # ─── Table of Contents ─────────────────────────────────────────────
 
-    def add_toc(self, title: str = "Cuprins", sections: list[dict] | None = None):
-        """Add TOC with both a field code (auto-updates in Word) and static entries.
+    def add_toc(self, title: str = "Cuprins", **kwargs):
+        """Add a Word-native TOC using field codes.
 
-        The w:updateFields setting in document.xml tells Word to refresh the TOC
-        automatically when the document is opened. Static entries are also written
-        as fallback content inside the field.
-
-        Args:
-            sections: List of dicts with 'title' and 'level' keys for static TOC entries.
+        The w:updateFields setting (set in __init__) tells Word to auto-update
+        the TOC with correct page numbers when the document is opened.
+        All field content (BEGIN, INSTR, SEPARATE, END) is in a single paragraph
+        to ensure Word treats it as one field.
         """
         # TOC heading
         self.doc.add_heading(title, level=1)
 
-        # Build TOC field code paragraph
+        # Single paragraph containing the entire field code
         p = self.doc.add_paragraph()
         p.paragraph_format.first_line_indent = Cm(0)
 
-        # --- Field BEGIN ---
-        r_begin = OxmlElement("w:r")
+        # Run 1: BEGIN
+        r1 = OxmlElement("w:r")
         fld_begin = OxmlElement("w:fldChar")
         fld_begin.set(qn("w:fldCharType"), "begin")
-        r_begin.append(fld_begin)
-        p._p.append(r_begin)
+        r1.append(fld_begin)
+        p._p.append(r1)
 
-        # --- Field INSTRUCTION ---
-        r_instr = OxmlElement("w:r")
-        instr_text = OxmlElement("w:instrText")
-        instr_text.set(qn("xml:space"), "preserve")
-        instr_text.text = r" TOC \o '1-3' \h \z \u "
-        r_instr.append(instr_text)
-        p._p.append(r_instr)
+        # Run 2: INSTRUCTION
+        r2 = OxmlElement("w:r")
+        instr = OxmlElement("w:instrText")
+        instr.set(qn("xml:space"), "preserve")
+        instr.text = r" TOC \o '1-3' \h \z \u "
+        r2.append(instr)
+        p._p.append(r2)
 
-        # --- Field SEPARATE ---
-        r_sep = OxmlElement("w:r")
+        # Run 3: SEPARATE
+        r3 = OxmlElement("w:r")
         fld_sep = OxmlElement("w:fldChar")
         fld_sep.set(qn("w:fldCharType"), "separate")
-        r_sep.append(fld_sep)
-        p._p.append(r_sep)
+        r3.append(fld_sep)
+        p._p.append(r3)
 
-        # --- Static TOC entries (fallback content between SEPARATE and END) ---
-        toc_entries = sections if sections else self._headings_for_toc
-        if toc_entries:
-            for entry in toc_entries:
-                toc_level = entry.get("level", 1)
-                toc_title = entry.get("title", "")
-                indent = "    " * (toc_level - 1)
-                toc_p = self.doc.add_paragraph()
-                toc_p.paragraph_format.first_line_indent = Cm(0)
-                toc_p.paragraph_format.space_before = Pt(2)
-                toc_p.paragraph_format.space_after = Pt(2)
-                if toc_level > 1:
-                    toc_p.paragraph_format.left_indent = Cm(1.0 * (toc_level - 1))
-                r = toc_p.add_run(toc_title)
-                r.font.name = FONT_BODY
-                r.font.size = FONT_SIZE_BODY
-                r.font.color.rgb = FONT_COLOR
-                if toc_level == 1:
-                    r.bold = True
-        else:
-            # Minimal placeholder if no sections known
-            r_placeholder = OxmlElement("w:r")
-            t_placeholder = OxmlElement("w:t")
-            t_placeholder.text = "[Cuprinsul se va actualiza automat la deschiderea documentului în Word]"
-            r_placeholder.append(t_placeholder)
-            p._p.append(r_placeholder)
+        # Run 4: Placeholder (replaced by Word on open)
+        r4 = OxmlElement("w:r")
+        t4 = OxmlElement("w:t")
+        t4.text = "[Cuprinsul se va actualiza automat]"
+        r4.append(t4)
+        p._p.append(r4)
 
-        # --- Field END --- (goes in a new paragraph after TOC entries)
-        p_end = self.doc.add_paragraph()
-        p_end.paragraph_format.first_line_indent = Cm(0)
-        r_end = OxmlElement("w:r")
+        # Run 5: END
+        r5 = OxmlElement("w:r")
         fld_end = OxmlElement("w:fldChar")
         fld_end.set(qn("w:fldCharType"), "end")
-        r_end.append(fld_end)
-        p_end._p.append(r_end)
+        r5.append(fld_end)
+        p._p.append(r5)
 
         self.doc.add_page_break()
 

@@ -12,34 +12,42 @@ from core.citation_engine import get_style
 
 
 def calculate_section_length(section_name: str, total_pages: int, total_sections: int, detail_level: str = "Standard") -> dict:
-    """Estimate content length requirements for a section."""
+    """Estimate content length requirements for a section.
+
+    Uses total_pages and total_sections to distribute page budget evenly,
+    with small adjustments for intro/conclusion (shorter) vs chapters (longer).
+    """
     from core.formatting import DETAIL_MULTIPLIERS
 
     multiplier = DETAIL_MULTIPLIERS.get(detail_level, 1.0)
     name_lower = section_name.lower()
 
-    # Allocate percentage of total pages
-    if any(kw in name_lower for kw in ["introducere", "argument", "introduction"]):
-        pct = 0.10
-    elif any(kw in name_lower for kw in ["conclu", "conclusion"]):
-        pct = 0.10
-    elif any(kw in name_lower for kw in ["capitol", "chapter", "capitolul"]):
-        pct = 0.25
-    elif any(kw in name_lower for kw in ["rezumat", "abstract", "summary"]):
-        pct = 0.05
-    else:
-        pct = 0.15
+    # Base: divide pages evenly among sections, then adjust by type
+    base_pages_per_section = total_pages / max(total_sections, 1)
 
-    estimated_pages = max(1, int(total_pages * pct * multiplier))
+    if any(kw in name_lower for kw in ["introducere", "argument", "introduction"]):
+        weight = 0.6  # Intro is shorter
+    elif any(kw in name_lower for kw in ["conclu", "conclusion"]):
+        weight = 0.5  # Conclusions are shorter
+    elif any(kw in name_lower for kw in ["rezumat", "abstract", "summary"]):
+        weight = 0.3  # Abstract is very short
+    elif any(kw in name_lower for kw in ["capitol", "chapter", "capitolul"]):
+        weight = 1.3  # Chapters get a bit more
+    else:
+        weight = 1.0
+
+    estimated_pages = max(0.5, base_pages_per_section * weight * multiplier)
     # ~250 words per page, ~3 paragraphs per page
-    paragraphs = max(3, estimated_pages * 3)
-    sentences_per_paragraph = 6
+    word_count = int(estimated_pages * 250)
+    paragraphs = max(2, int(estimated_pages * 3))
+    sentences_per_paragraph = 5
 
     return {
-        "estimated_pages": estimated_pages,
+        "estimated_pages": round(estimated_pages, 1),
         "paragraphs": paragraphs,
         "sentences_per_paragraph": sentences_per_paragraph,
-        "word_count": estimated_pages * 250,
+        "word_count": word_count,
+        "max_tokens": max(200, int(word_count * 1.5)),  # Token budget (~1.5 tokens/word)
     }
 
 
@@ -93,7 +101,7 @@ def build_section_prompt(
     """Build the complete prompt for generating a document section."""
 
     length = calculate_section_length(section_name, total_pages, total_sections, detail_level)
-    target_citations = max(2, footnotes_per_page * length["estimated_pages"])
+    target_citations = max(1, int(footnotes_per_page * length["estimated_pages"]))
 
     # Build bibliography authors hint
     authors_hint = ""
@@ -140,29 +148,33 @@ def build_section_prompt(
     prompt = f"""Scrie conținut academic profesional în limba {language} pentru secțiunea '{section_name}'
 din lucrarea de {doc_type} intitulată '{title}'.
 
-CERINȚE DE LUNGIME:
-- Aproximativ {length['word_count']} cuvinte ({length['estimated_pages']} pagini)
-- {length['paragraphs']} paragrafe, fiecare de {length['sentences_per_paragraph']} propoziții
-- Nivel de detaliu: {detail_level}
+LIMITĂ STRICTĂ DE LUNGIME (OBLIGATORIU):
+- EXACT {length['word_count']} cuvinte (±10%). NU DEPĂȘI această limită!
+- EXACT {length['paragraphs']} paragrafe, fiecare de {length['sentences_per_paragraph']} propoziții
+- Aceasta corespunde la aproximativ {length['estimated_pages']} pagini
+- Documentul total are {total_pages} pagini, iar aceasta este una din {total_sections} secțiuni
+- Dacă scrii mai mult de {int(length['word_count'] * 1.1)} cuvinte, textul va fi TRUNCHIAT
 
 CERINȚE DE CITARE:
-- Include MINIM {target_citations} citări în format (Autor, An) sau (Autor, An, p. X)
+- Include {target_citations} citări în format (Autor, An) sau (Autor, An, p. X)
 - Stil de citare: {citation_style_name}
+- NU folosi asteriscuri (*) în jurul titlurilor din citări — scrie text simplu
 {authors_hint}
 
 CERINȚE DE STRUCTURĂ:
 - Folosește # pentru titluri principale, ## pentru subtitluri, ### pentru sub-subtitluri
 - Scrie proză academică continuă, fără liste sau bullets
-- Fiecare paragraf: 5-8 propoziții complete
+- Fiecare paragraf: {length['sentences_per_paragraph']} propoziții complete
 - Ton formal, obiectiv, critic
 - Folosește diacriticele românești corect (dacă scrii în română)
 
 INTERZIS:
-- Markdown (bold, italic) — scrie text simplu
+- Asteriscuri (*text*) sau orice formatare markdown — scrie TEXT SIMPLU
 - Liste cu bullets sau numerotate
 - Texte meta ("Voi prezenta...", "În această secțiune...")
 - Fabricarea de surse bibliografice
 - Copierea textului din ghiduri
+- Depășirea limitei de {length['word_count']} cuvinte
 {rules_text}
 {context_hint}"""
 

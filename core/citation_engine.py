@@ -244,6 +244,8 @@ class FootnoteFormatter:
 
     def format(self, author: str, year: str, pages: str | None = None) -> str:
         """Format a footnote for the given citation, using bibliography lookup."""
+        # Strip any markdown asterisks from inputs
+        author = re.sub(r'\*+([^*]+)\*+', r'\1', author).strip()
         surname = author.split()[0] if " " in author else author
         surname_lower = surname.lower()
 
@@ -261,14 +263,17 @@ class FootnoteFormatter:
 
     def _format_from_biblio_entry(self, entry: str, pages: str | None) -> str:
         """Use the full bibliography entry as the footnote text, adding page number."""
-        # Clean trailing period for re-adding
-        clean = entry.rstrip('. ')
+        # Strip markdown asterisks
+        clean = re.sub(r'\*+([^*]+)\*+', r'\1', entry)
+        clean = clean.rstrip('. ')
         if pages:
             return f"{clean}, p. {pages}."
         return f"{clean}."
 
     def _format_generated(self, author: str, year: str, pages: str | None) -> str:
         """Generate a plausible AR-format footnote when no bibliography match found."""
+        # Strip markdown asterisks from author
+        author = re.sub(r'\*+([^*]+)\*+', r'\1', author)
         # Build full AR format: Autor, Titlu, Editura, Loc, An, p. X
         title = _generate_plausible_title(author)
         publisher = random.choice(_PUBLISHERS)

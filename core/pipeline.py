@@ -213,12 +213,19 @@ class GenerationPipeline:
                 previous_sections=[s["title"] for s in content_sections],
             )
 
+            # Calculate token budget based on target page count
+            from core.prompt_builder import calculate_section_length
+            sec_length = calculate_section_length(
+                section["title"], page_count, total_content, detail_level,
+            )
+            section_max_tokens = min(4096, sec_length.get("max_tokens", 4096))
+
             try:
                 text, provider_used = generate_text(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     provider_order=provider_order,
-                    max_tokens=4096,
+                    max_tokens=section_max_tokens,
                     temperature=0.7,
                 )
             except AIProviderError as e:
@@ -275,12 +282,8 @@ class GenerationPipeline:
         # Abstract
         builder.add_abstract(abstract_text)
 
-        # Build all TOC entries (including content sections)
-        all_toc_entries = [{"title": s["title"], "level": s["level"]} for s in non_biblio_sections]
-        all_toc_entries.append({"title": "Bibliografie", "level": 1})
-
-        # TOC with static entries + field code (auto-updates on open)
-        builder.add_toc(sections=all_toc_entries)
+        # TOC with field code (auto-updates on open via w:updateFields)
+        builder.add_toc()
 
         # Page numbers (from this section onward)
         builder.add_page_numbers()
@@ -314,9 +317,8 @@ class GenerationPipeline:
                     builder.track_heading(h_title, level)
                     continue
 
-                # Clean markdown
-                para_text = re.sub(r'\*\*(.+?)\*\*', r'\1', para_text)
-                para_text = re.sub(r'\*(.+?)\*', r'\1', para_text)
+                # Clean markdown — strip all asterisk formatting
+                para_text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', para_text)
                 para_text = re.sub(r'^[-•]\s+', '', para_text, flags=re.MULTILINE)
                 para_text = " ".join(para_text.split("\n"))
 
@@ -342,8 +344,9 @@ class GenerationPipeline:
                     )
                     builder.add_footnote(p, fn_text)
 
-        # Bibliography
-        builder.add_bibliography(biblio_entries)
+        # Bibliography — strip markdown asterisks from entries
+        clean_biblio = [re.sub(r'\*+([^*]+)\*+', r'\1', e) for e in biblio_entries]
+        builder.add_bibliography(clean_biblio)
 
         # Save
         safe_title = re.sub(r'[^\w\s-]', '', title)[:50].strip().replace(' ', '_')
