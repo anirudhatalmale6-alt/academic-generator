@@ -42,7 +42,7 @@ class AcademicDocBuilder:
     # ─── Page layout ───────────────────────────────────────────────────
 
     def _setup_page_layout(self):
-        """Set margins and page size (A4)."""
+        """Set margins, page size (A4), and footnote restart per page."""
         for section in self.doc.sections:
             section.top_margin = MARGIN_TOP
             section.bottom_margin = MARGIN_BOTTOM
@@ -50,6 +50,25 @@ class AcademicDocBuilder:
             section.right_margin = MARGIN_RIGHT
             section.page_width = Cm(21)
             section.page_height = Cm(29.7)
+            self._set_footnote_restart(section)
+
+    def _set_footnote_restart(self, section):
+        """Set w:footnotePr with w:numRestart eachPage in section properties."""
+        sectPr = section._sectPr
+        # Remove existing footnotePr if any
+        for existing in sectPr.findall(qn("w:footnotePr")):
+            sectPr.remove(existing)
+        # Add footnotePr with numRestart=eachPage
+        ftn_pr = OxmlElement("w:footnotePr")
+        num_restart = OxmlElement("w:numRestart")
+        num_restart.set(qn("w:val"), "eachPage")
+        ftn_pr.append(num_restart)
+        # Insert after pgSz/pgMar if present, otherwise at start
+        pg_mar = sectPr.find(qn("w:pgMar"))
+        if pg_mar is not None:
+            pg_mar.addnext(ftn_pr)
+        else:
+            sectPr.insert(0, ftn_pr)
 
     # ─── Styles ────────────────────────────────────────────────────────
 
@@ -237,6 +256,7 @@ class AcademicDocBuilder:
         new_section.bottom_margin = MARGIN_BOTTOM
         new_section.left_margin = MARGIN_LEFT
         new_section.right_margin = MARGIN_RIGHT
+        self._set_footnote_restart(new_section)
 
     # ─── Abstract / Summary ───────────────────────────────────────────
 
