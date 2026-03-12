@@ -10,7 +10,7 @@ from typing import Optional, Callable
 
 from core.ai_providers import generate_text, AIProviderError
 from core.document_builder import AcademicDocBuilder
-from core.citation_engine import find_citations, get_style, CITATION_PATTERN
+from core.citation_engine import find_citations, get_style, CITATION_PATTERN, FootnoteFormatter
 from core.bibliography import validate_bibliography, parse_bib_file, search_crossref
 from core.prompt_builder import (
     build_system_prompt, build_section_prompt, build_abstract_prompt,
@@ -256,6 +256,9 @@ class GenerationPipeline:
         builder = AcademicDocBuilder()
         citation_style = get_style(citation_style_name)
 
+        # Create bibliography-aware footnote formatter
+        fn_formatter = FootnoteFormatter(biblio_entries, citation_style)
+
         # Cover page
         import datetime
         builder.add_cover_page(
@@ -272,16 +275,21 @@ class GenerationPipeline:
         # Abstract
         builder.add_abstract(abstract_text)
 
-        # TOC
-        builder.add_toc()
+        # Build all TOC entries (including content sections)
+        all_toc_entries = [{"title": s["title"], "level": s["level"]} for s in non_biblio_sections]
+        all_toc_entries.append({"title": "Bibliografie", "level": 1})
+
+        # TOC with static entries + field code (auto-updates on open)
+        builder.add_toc(sections=all_toc_entries)
 
         # Page numbers (from this section onward)
         builder.add_page_numbers()
 
         # Content sections with footnote injection
         for section in content_sections:
-            # Add heading
+            # Add heading and track it
             builder.doc.add_heading(section["title"], level=section["level"])
+            builder.track_heading(section["title"], section["level"])
 
             # Process content paragraph by paragraph, injecting footnotes
             content = section["content"]
@@ -301,7 +309,9 @@ class GenerationPipeline:
                 heading_match = re.match(r'^(#{1,3})\s+(.+)$', para_text)
                 if heading_match:
                     level = min(len(heading_match.group(1)), 3)
-                    builder.doc.add_heading(heading_match.group(2).strip(), level=level)
+                    h_title = heading_match.group(2).strip()
+                    builder.doc.add_heading(h_title, level=level)
+                    builder.track_heading(h_title, level)
                     continue
 
                 # Clean markdown
@@ -323,9 +333,9 @@ class GenerationPipeline:
                 p = builder.doc.add_paragraph(clean_text)
                 builder._apply_body_format(p)
 
-                # Add footnotes for each citation found
+                # Add footnotes using bibliography-aware formatter
                 for cit in citations:
-                    fn_text = citation_style.format_footnote(
+                    fn_text = fn_formatter.format(
                         author=cit["author"],
                         year=cit["year"],
                         pages=cit["pages"],
