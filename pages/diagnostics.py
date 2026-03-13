@@ -38,7 +38,7 @@ def render(app_dir: Path):
             "name": "Google Gemini",
             "env_key": "GEMINI_API_KEY",
             "model_key": "GEMINI_MODEL",
-            "default_model": "gemini-1.5-pro",
+            "default_model": "gemini-2.0-flash",
             "url": "https://aistudio.google.com/app/apikey",
         },
     }
@@ -104,6 +104,6 @@ def render(app_dir: Path):
                 "# Default models (optional)\n"
                 "ANTHROPIC_MODEL=claude-sonnet-4-20250514\n"
                 "OPENAI_MODEL=gpt-4o-mini\n"
-                "GEMINI_MODEL=gemini-1.5-pro\n",
+                "GEMINI_MODEL=gemini-2.0-flash\n",
                 language="bash",
             )

@@ -1,5 +1,6 @@
 """
-Editor page — Load and modify an existing generated document.
+Editor page — Load and modify an existing document using free-text instructions.
+The AI applies all changes in a single pass based on the user's description.
 """
 
 import re
@@ -10,13 +11,13 @@ from docx import Document
 from core.registry import DocumentRegistry
 from core.ai_providers import generate_text, get_available_providers
 from core.document_builder import AcademicDocBuilder
-from core.citation_engine import get_style, find_citations, CITATION_PATTERN
 from core.prompt_builder import build_system_prompt
+from core.guide_reader import extract_text as extract_guide_text
 
 
 def render(app_dir: Path):
     st.title("Editor Document")
-    st.markdown("Încărcați un document existent și modificați secțiuni specifice folosind AI.")
+    st.markdown("Încărcați un document și descrieți toate modificările dorite. AI-ul le va aplica într-o singură trecere.")
 
     registry_path = app_dir / "registry.json"
     output_dir = app_dir / "outputs"
@@ -83,76 +84,87 @@ def render(app_dir: Path):
     else:
         st.info("Nu s-au găsit titluri de secțiuni în document.")
 
-    # ─── Section selection ─────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("Modificare Secțiune")
-
-    if not headings:
-        return
-
-    heading_options = [f"{h['indent']}{h['title']}" for h in headings]
-    selected_heading_idx = st.selectbox(
-        "Selectați secțiunea de modificat",
-        range(len(headings)),
-        format_func=lambda i: heading_options[i],
-    )
-
-    selected_heading = headings[selected_heading_idx]
-
-    # Extract current section content
-    start_idx = selected_heading["index"]
-    end_idx = len(doc.paragraphs)
-    for h in headings:
-        if h["index"] > start_idx:
-            end_idx = h["index"]
-            break
-
-    current_content = "\n\n".join(
-        doc.paragraphs[i].text
-        for i in range(start_idx + 1, end_idx)
-        if doc.paragraphs[i].text.strip()
-    )
-
-    st.text_area(
-        "Conținut curent",
-        value=current_content[:2000] + ("..." if len(current_content) > 2000 else ""),
-        height=200,
-        disabled=True,
-    )
-
     # ─── Modification instructions ─────────────────────────────────
+    st.markdown("---")
+    st.subheader("Instrucțiuni de Modificare")
+
     modification = st.text_area(
-        "Instrucțiuni de modificare",
-        height=150,
-        help="Descrieți ce modificări doriți pentru această secțiune.",
-        placeholder="Ex: Adaugă mai multe detalii despre metodologia cercetării...",
+        "Descrieți toate modificările dorite",
+        height=200,
+        help="Descrieți liber ce modificări doriți. Puteți menționa secțiuni specifice, cereri de adăugare/eliminare conținut, etc.",
+        placeholder="Ex: Rescrie secțiunea Concluzii cu accent pe rezultatele practice. "
+                    "Adaugă mai multe detalii în Introducere despre contextul economic actual. "
+                    "Corectează greșelile gramaticale din tot documentul.",
+    )
+
+    # ─── Reference file uploads ────────────────────────────────────
+    ref_files = st.file_uploader(
+        "Fișiere de referință (opțional)",
+        type=["pdf", "docx", "txt", "csv", "xlsx", "md"],
+        accept_multiple_files=True,
+        help="Fișiere pe care AI-ul ar trebui să le ia în considerare la modificare.",
     )
 
     providers = get_available_providers()
     provider_list = list(providers.keys())
 
-    st.warning(f"Secțiunea selectată pentru modificare: **{selected_heading['title']}**")
-
-    if st.button("Aplică Modificarea", type="primary", disabled=not modification.strip()):
+    if st.button("Aplică Modificările", type="primary", disabled=not modification.strip(), use_container_width=True):
         if not provider_list:
             st.error("Niciun provider AI configurat!")
             return
 
-        with st.spinner(f"Se regenerează secțiunea '{selected_heading['title']}'..."):
-            prompt = f"""Ai mai jos conținutul actual al secțiunii '{selected_heading['title']}':
+        # Extract full document content
+        full_content = ""
+        for para in doc.paragraphs:
+            if para.style.name.startswith("Heading"):
+                level = int(para.style.name.split()[-1])
+                full_content += f"\n{'#' * level} {para.text}\n\n"
+            elif para.text.strip():
+                full_content += f"{para.text}\n\n"
 
---- CONȚINUT ACTUAL ---
-{current_content[:4000]}
---- SFÂRȘIT CONȚINUT ---
+        # Truncate if too long
+        max_content = 12000
+        if len(full_content) > max_content:
+            full_content = full_content[:max_content] + "\n\n[... conținut trunchiat ...]"
 
-Instrucțiuni de modificare:
+        # Extract reference file content
+        ref_context = ""
+        saved_refs = []
+        if ref_files:
+            ref_dir = output_dir / "_editor_temp" / "refs"
+            ref_dir.mkdir(parents=True, exist_ok=True)
+            for rf in ref_files:
+                ref_path = ref_dir / rf.name
+                ref_path.write_bytes(rf.read())
+                saved_refs.append(ref_path)
+                text = extract_guide_text(ref_path)
+                if text:
+                    ref_context += f"\n--- Fișier referință: {rf.name} ---\n{text[:3000]}\n"
+
+        with st.spinner("Se aplică modificările..."):
+            prompt = f"""Ai mai jos conținutul complet al unui document academic:
+
+--- DOCUMENT ORIGINAL ---
+{full_content}
+--- SFÂRȘIT DOCUMENT ---
+{f'''
+--- FIȘIERE DE REFERINȚĂ ---
+{ref_context}
+--- SFÂRȘIT REFERINȚE ---
+''' if ref_context else ''}
+Instrucțiuni de modificare de la utilizator:
 {modification}
 
-Rescrie secțiunea aplicând modificările cerute. Păstrează stilul academic, lungimea similară,
-și citările existente. Adaugă citări noi dacă este necesar, în format (Autor, An, p. X).
-NU folosi markdown. Scrie proză academică continuă.
+IMPORTANT:
+- Aplică TOATE modificările cerute de utilizator
+- Păstrează structura documentului (titluri cu # pentru H1, ## pentru H2, ### pentru H3)
+- Păstrează stilul academic și tonul formal
+- Păstrează citările existente în format (Autor, An) sau (Autor, An, p. X)
+- NU folosi markdown bold/italic (*text*)
+- Scrie proză academică continuă, fără liste cu bullets
+- Returnează ÎNTREGUL document modificat, nu doar secțiunile schimbate
 
-Scrie DOAR conținutul modificat:"""
+Scrie documentul modificat complet:"""
 
             try:
                 new_content, provider_used = generate_text(
@@ -162,30 +174,52 @@ Scrie DOAR conținutul modificat:"""
                     max_tokens=4096,
                 )
 
-                st.success(f"Secțiune regenerată cu {provider_used}")
-                st.text_area("Conținut nou", value=new_content, height=300, disabled=True)
+                st.success(f"Modificări aplicate cu {provider_used}")
 
-                # Rebuild document with modified section
-                new_doc = Document(str(doc_path))
+                # Show preview of changes
+                with st.expander("Previzualizare conținut modificat", expanded=True):
+                    st.text_area("Conținut nou", value=new_content, height=400, disabled=True)
 
-                # Replace section content
-                # Remove old paragraphs (in reverse to preserve indices)
-                for i in range(end_idx - 1, start_idx, -1):
-                    p = new_doc.paragraphs[i]
-                    p._element.getparent().remove(p._element)
+                # Rebuild document
+                builder = AcademicDocBuilder()
 
-                # Insert new content after the heading
-                heading_element = new_doc.paragraphs[start_idx]._element
-                parent = heading_element.getparent()
+                # Parse AI output and rebuild sections
+                lines = new_content.strip().split("\n")
+                current_para = []
 
-                for para_text in reversed(new_content.strip().split("\n\n")):
-                    para_text = para_text.strip()
-                    if not para_text:
+                for line in lines:
+                    stripped = line.strip()
+                    if not stripped:
+                        if current_para:
+                            text = " ".join(current_para)
+                            text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
+                            p = builder.doc.add_paragraph(text)
+                            builder._apply_body_format(p)
+                            current_para = []
                         continue
-                    new_p = new_doc.add_paragraph(para_text)
-                    # Move it after the heading
-                    parent.remove(new_p._element)
-                    heading_element.addnext(new_p._element)
+
+                    heading_match = re.match(r'^(#{1,3})\s+(.+)$', stripped)
+                    if heading_match:
+                        if current_para:
+                            text = " ".join(current_para)
+                            text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
+                            p = builder.doc.add_paragraph(text)
+                            builder._apply_body_format(p)
+                            current_para = []
+
+                        level = len(heading_match.group(1))
+                        h_text = heading_match.group(2).strip()
+                        builder.doc.add_heading(h_text, level=min(level, 3))
+                    else:
+                        stripped = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', stripped)
+                        stripped = re.sub(r'^[-•]\s+', '', stripped)
+                        current_para.append(stripped)
+
+                if current_para:
+                    text = " ".join(current_para)
+                    text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
+                    p = builder.doc.add_paragraph(text)
+                    builder._apply_body_format(p)
 
                 # Save as new version
                 stem = doc_path.stem
@@ -197,7 +231,7 @@ Scrie DOAR conținutul modificat:"""
                     new_stem = f"{stem}_v2"
 
                 new_path = doc_path.parent / f"{new_stem}.docx"
-                new_doc.save(str(new_path))
+                builder.save(new_path)
 
                 st.success(f"Document salvat: {new_path.name}")
                 with open(new_path, "rb") as f:
@@ -210,3 +244,5 @@ Scrie DOAR conținutul modificat:"""
 
             except Exception as e:
                 st.error(f"Eroare: {e}")
+                import traceback
+                st.expander("Detalii eroare").code(traceback.format_exc())

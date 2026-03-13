@@ -239,69 +239,110 @@ class FootnoteFormatter:
         return index
 
     def format(self, author: str, year: str, pages: str | None = None) -> str:
-        """Format a footnote using bibliography lookup with round-robin diversity."""
-        author = re.sub(r'\*+([^*]+)\*+', r'\1', author).strip()
-        surname = author.split()[0] if " " in author else author
-        surname_lower = surname.lower()
+        """Format a footnote using round-robin rotation through ALL bibliography entries.
 
-        # Try exact match (author + year)
-        key = f"{surname_lower}_{year}"
-        entries = self._index.get(key)
-        if not entries:
-            entries = self._index.get(surname_lower)
-
-        if entries:
-            # Round-robin through matched entries
-            entry = entries[self._global_counter % len(entries)]
-        elif self._all_entries:
-            # No match — rotate through ALL bibliography entries for diversity
+        Always rotates through the full bibliography for maximum diversity.
+        The author/year from the citation are only used for page numbers.
+        """
+        if self._all_entries:
             entry = self._all_entries[self._global_counter % len(self._all_entries)]
-        else:
-            entry = None
-
-        self._global_counter += 1
-
-        if entry:
+            self._global_counter += 1
             return self._format_entry(entry, pages)
         else:
+            # No bibliography at all — generate placeholder
+            author = re.sub(r'\*+([^*]+)\*+', r'\1', author).strip()
+            self._global_counter += 1
             return self._format_generated(author, year, pages)
 
     def _parse_entry(self, entry: str) -> dict:
-        """Parse a bibliography entry into components: author, title, publisher, city, year."""
+        """Parse a bibliography entry into components: author, title, publisher, city, year.
+
+        Handles Romanian bibliography format: Surname, Firstname [și Surname2, Firstname2],
+        Title, [Editura Publisher,] [City,] Year.
+        """
         entry = re.sub(r'\*+([^*]+)\*+', r'\1', entry).strip().rstrip('.')
 
         # Extract year
         year_match = re.search(r'\b(19\d{2}|20\d{2})\b', entry)
         year = year_match.group(1) if year_match else ""
 
-        # Split by commas to extract parts
-        parts = [p.strip() for p in entry.split(',')]
-
-        author = parts[0] if parts else ""
-        title = ""
+        # Find publisher (Editura ...) — this is a reliable anchor point
         publisher = ""
-        city = ""
+        publisher_match = re.search(r'(Editura\s+[^,]+)', entry, re.IGNORECASE)
+        if publisher_match:
+            publisher = publisher_match.group(1).strip()
 
-        # Look for known patterns in remaining parts
-        for p in parts[1:]:
-            p_lower = p.lower().strip()
-            if p_lower.startswith("editura") or p_lower.startswith("ed."):
-                publisher = p.strip()
-            elif re.match(r'^(19|20)\d{2}$', p.strip()):
-                continue  # Skip standalone year
-            elif re.match(r'^p\.?\s*\d', p_lower):
-                continue  # Skip page references
-            elif any(city_name.lower() in p_lower for city_name in _CITIES):
-                city = p.strip()
-            elif not title:
-                title = p.strip()
-            elif not city and len(p.strip()) < 30:
-                city = p.strip()
+        # Find city — look for known Romanian cities
+        city = ""
+        for city_name in _CITIES:
+            if city_name.lower() in entry.lower():
+                city = city_name
+                break
+
+        # Extract author and title by finding the boundary
+        # Strategy: Everything before the publisher/title starts is author.
+        # The title is typically after the author firstname and before "Editura".
+        author = ""
+        title = ""
+
+        if publisher_match:
+            # Everything before publisher is author + title
+            before_pub = entry[:publisher_match.start()].rstrip(', ')
+        else:
+            # Remove year and city at the end
+            before_pub = entry
+            if year:
+                before_pub = re.sub(r',?\s*' + re.escape(year) + r'\s*$', '', before_pub)
+            if city:
+                before_pub = re.sub(r',?\s*' + re.escape(city) + r'\s*$', '', before_pub, flags=re.IGNORECASE)
+            before_pub = before_pub.rstrip(', ')
+
+        # Split author from title: author is "Surname, Firstname [și Surname2, Firstname2]"
+        # followed by the title. The title usually starts with an uppercase letter after a comma
+        # that follows a firstname (not a surname pattern).
+        # Heuristic: find the first comma-separated segment that looks like a title
+        # (longer than 20 chars, or starts with a known title word)
+        parts = before_pub.split(', ')
+        author_parts = []
+        title_parts = []
+        found_title = False
+
+        for i, p in enumerate(parts):
+            p_stripped = p.strip()
+            if found_title:
+                title_parts.append(p_stripped)
+            elif i >= 2 and (len(p_stripped) > 25 or
+                             any(p_stripped.lower().startswith(w) for w in
+                                 ["analiza", "contabilitat", "managementul", "studiu", "teoria",
+                                  "economia", "fundamente", "perspectiv", "introducere",
+                                  "drept", "finant", "politici", "diagnostic", "evaluarea",
+                                  "aspecte", "provocar", "dinamica", "contribu"])):
+                found_title = True
+                title_parts.append(p_stripped)
+            else:
+                author_parts.append(p_stripped)
+
+        author = ", ".join(author_parts) if author_parts else parts[0] if parts else ""
+        title = ", ".join(title_parts) if title_parts else ""
+
+        # If no title was found but we have many parts, use a fallback split
+        if not title and len(parts) > 2:
+            author = ", ".join(parts[:2])
+            title = ", ".join(parts[2:])
 
         return {"author": author, "title": title, "publisher": publisher, "city": city, "year": year}
 
     def _format_entry(self, entry: str, pages: str | None) -> str:
         """Format a bibliography entry using the selected citation style."""
+        clean = re.sub(r'\*+([^*]+)\*+', r'\1', entry).strip().rstrip('. ')
+
+        # For AR style, use the raw bibliography entry directly (it's already in AR format)
+        if isinstance(self.style, AcademiaRomanaStyle):
+            if pages:
+                return f"{clean}, p. {pages}."
+            return f"{clean}."
+
+        # For other styles, parse and reformat
         parsed = self._parse_entry(entry)
         return self.style.format_footnote(
             author=parsed["author"],

@@ -83,7 +83,7 @@ class OpenAIProvider(AIProvider):
 class GeminiProvider(AIProvider):
     def __init__(self):
         key = os.getenv("GEMINI_API_KEY", "")
-        model = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
+        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         super().__init__("Gemini", key, model)
 
     def generate(self, prompt: str, system_prompt: str = "", max_tokens: int = 4096, temperature: float = 0.7) -> str:
