@@ -343,19 +343,16 @@ class GenerationPipeline:
                 p = builder.doc.add_paragraph(clean_text)
                 builder._apply_body_format(p)
 
-                # Combine all citations into a single footnote per paragraph.
-                # Multiple sources are listed inside one footnote, separated by "; ".
+                # One footnote per paragraph with exactly one source.
+                # Uses the first citation's page info; the source comes from
+                # round-robin rotation through the full bibliography.
                 if citations:
-                    fn_parts = []
-                    for cit in citations:
-                        fn_text = fn_formatter.format(
-                            author=cit["author"],
-                            year=cit["year"],
-                            pages=cit["pages"],
-                        )
-                        fn_parts.append(fn_text.rstrip("."))
-                    combined_fn = "; ".join(fn_parts) + "."
-                    builder.add_footnote(p, combined_fn)
+                    fn_text = fn_formatter.format(
+                        author=citations[0]["author"],
+                        year=citations[0]["year"],
+                        pages=citations[0]["pages"],
+                    )
+                    builder.add_footnote(p, fn_text)
 
         # Bibliography — strip markdown asterisks from entries
         clean_biblio = [re.sub(r'\*+([^*]+)\*+', r'\1', e) for e in biblio_entries]

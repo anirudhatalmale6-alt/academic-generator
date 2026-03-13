@@ -91,19 +91,48 @@ class GeminiProvider(AIProvider):
         genai.configure(api_key=self.api_key)
         model = genai.GenerativeModel(self.model)
         full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+
+        # Disable all safety filters for academic content generation
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+
         response = model.generate_content(
             full_prompt,
             generation_config=genai.GenerationConfig(
                 max_output_tokens=max_tokens,
                 temperature=temperature,
             ),
+            safety_settings=safety_settings,
         )
-        # Handle Gemini content safety blocks (finish_reason != 1)
+
+        # Check for blocked content
         if hasattr(response, 'candidates') and response.candidates:
             candidate = response.candidates[0]
-            if hasattr(candidate, 'finish_reason') and candidate.finish_reason != 1:
-                raise Exception(f"Gemini a blocat conținutul (finish_reason={candidate.finish_reason}). Încercați alt provider.")
-        return response.text
+            # finish_reason: STOP=1, MAX_TOKENS=2, SAFETY=3, RECITATION=4
+            fr = getattr(candidate, 'finish_reason', None)
+            if fr is not None and fr not in (1, 2):  # Allow STOP and MAX_TOKENS
+                # Try to get text anyway before raising
+                try:
+                    return response.text
+                except Exception:
+                    raise Exception(
+                        f"Gemini a blocat conținutul (finish_reason={fr}). "
+                        "Încercați alt provider sau reformulați cererea."
+                    )
+        elif not getattr(response, 'candidates', None):
+            raise Exception(
+                "Gemini nu a returnat niciun rezultat. "
+                "Încercați alt provider sau reformulați cererea."
+            )
+
+        try:
+            return response.text
+        except ValueError as e:
+            raise Exception(f"Gemini a blocat conținutul: {e}. Încercați alt provider.")
 
 
 # Provider registry

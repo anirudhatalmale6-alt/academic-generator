@@ -1,23 +1,224 @@
 """
-Editor page — Load and modify an existing document using free-text instructions.
-The AI applies all changes in a single pass based on the user's description.
+Editor page — Modify an existing document by replacing only the requested sections.
+Preserves the original document's formatting, cover page, TOC, footnotes, and bibliography.
 """
 
 import re
+import copy
 import streamlit as st
 from pathlib import Path
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 from core.registry import DocumentRegistry
 from core.ai_providers import generate_text, get_available_providers
-from core.document_builder import AcademicDocBuilder
 from core.prompt_builder import build_system_prompt
 from core.guide_reader import extract_text as extract_guide_text
 
 
+def _parse_doc_sections(doc):
+    """Parse a Document into sections grouped by heading.
+
+    Returns list of dicts: {heading, heading_idx, level, paragraphs: [(idx, text)]}
+    """
+    sections = []
+    current = None
+
+    for i, para in enumerate(doc.paragraphs):
+        if para.style.name.startswith("Heading"):
+            try:
+                level = int(para.style.name.split()[-1])
+            except ValueError:
+                level = 1
+            if current is not None:
+                sections.append(current)
+            current = {
+                "heading": para.text.strip(),
+                "heading_idx": i,
+                "level": level,
+                "paragraphs": [],
+            }
+        elif current is not None and para.text.strip():
+            current["paragraphs"].append((i, para.text.strip()))
+
+    if current is not None:
+        sections.append(current)
+
+    return sections
+
+
+def _parse_ai_modifications(ai_output: str) -> dict[str, str]:
+    """Parse AI output for modified sections.
+
+    Expected format:
+    === MODIFIED: Section Title ===
+    content...
+    === END ===
+    """
+    modifications = {}
+    pattern = re.compile(
+        r'===\s*MODIFIED:\s*(.+?)\s*===\s*\n(.*?)\n\s*===\s*END\s*===',
+        re.DOTALL | re.IGNORECASE,
+    )
+    for match in pattern.finditer(ai_output):
+        title = match.group(1).strip()
+        content = match.group(2).strip()
+        if title and content:
+            modifications[title] = content
+
+    return modifications
+
+
+def _replace_section_in_doc(doc, heading_title: str, new_text: str) -> bool:
+    """Replace the content of a section in-place, preserving the rest of the document.
+
+    Finds the heading, removes all paragraphs between it and the next heading,
+    then inserts new formatted paragraphs.
+    Returns True if the section was found and modified.
+    """
+    body = doc.element.body
+    all_paras = list(doc.paragraphs)
+
+    # Find heading paragraph (case-insensitive match)
+    heading_idx = None
+    for i, p in enumerate(all_paras):
+        if p.style.name.startswith("Heading") and p.text.strip().lower() == heading_title.strip().lower():
+            heading_idx = i
+            break
+
+    if heading_idx is None:
+        # Try partial match (heading might have been slightly different)
+        target = heading_title.strip().lower()
+        for i, p in enumerate(all_paras):
+            if p.style.name.startswith("Heading") and target in p.text.strip().lower():
+                heading_idx = i
+                break
+
+    if heading_idx is None:
+        return False
+
+    # Find the end of this section (next heading or end of document)
+    end_idx = len(all_paras)
+    for i in range(heading_idx + 1, len(all_paras)):
+        if all_paras[i].style.name.startswith("Heading"):
+            end_idx = i
+            break
+
+    # Collect elements to remove (content paragraphs only, not the heading)
+    elements_to_remove = []
+    for i in range(heading_idx + 1, end_idx):
+        elements_to_remove.append(all_paras[i]._element)
+
+    # Remove content paragraphs
+    for elem in elements_to_remove:
+        body.remove(elem)
+
+    # Parse new text into paragraphs
+    new_paras_text = [p.strip() for p in new_text.strip().split('\n\n') if p.strip()]
+    # If only single newlines used, split by those
+    if len(new_paras_text) <= 1 and '\n' in new_text:
+        new_paras_text = [p.strip() for p in new_text.strip().split('\n') if p.strip()]
+
+    # Insert new paragraphs after the heading element
+    insert_after = all_paras[heading_idx]._element
+    for text in new_paras_text:
+        # Strip markdown formatting
+        text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
+        text = re.sub(r'^[-•]\s+', '', text, flags=re.MULTILINE)
+
+        # Check if it's a sub-heading
+        heading_match = re.match(r'^(#{1,3})\s+(.+)$', text)
+        if heading_match:
+            level = min(len(heading_match.group(1)), 3)
+            h_text = heading_match.group(2).strip()
+            new_p_elem = _create_heading_element(h_text, level)
+        else:
+            new_p_elem = _create_body_paragraph(text)
+
+        insert_after.addnext(new_p_elem)
+        insert_after = new_p_elem
+
+    return True
+
+
+def _create_body_paragraph(text: str):
+    """Create a properly formatted body paragraph element."""
+    p = OxmlElement("w:p")
+
+    # Paragraph properties: 1.5 spacing, justified, first-line indent
+    pPr = OxmlElement("w:pPr")
+    spacing = OxmlElement("w:spacing")
+    spacing.set(qn("w:line"), "360")  # 1.5 line spacing
+    spacing.set(qn("w:lineRule"), "auto")
+    pPr.append(spacing)
+    jc = OxmlElement("w:jc")
+    jc.set(qn("w:val"), "both")
+    pPr.append(jc)
+    ind = OxmlElement("w:ind")
+    ind.set(qn("w:firstLine"), "709")  # ~1.25cm first-line indent
+    pPr.append(ind)
+    p.append(pPr)
+
+    # Run with TNR 12pt
+    r = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+    fonts = OxmlElement("w:rFonts")
+    fonts.set(qn("w:ascii"), "Times New Roman")
+    fonts.set(qn("w:hAnsi"), "Times New Roman")
+    fonts.set(qn("w:cs"), "Times New Roman")
+    rPr.append(fonts)
+    sz = OxmlElement("w:sz")
+    sz.set(qn("w:val"), "24")  # 12pt
+    rPr.append(sz)
+    szCs = OxmlElement("w:szCs")
+    szCs.set(qn("w:val"), "24")
+    rPr.append(szCs)
+    r.append(rPr)
+    t = OxmlElement("w:t")
+    t.set(qn("xml:space"), "preserve")
+    t.text = text
+    r.append(t)
+    p.append(r)
+
+    return p
+
+
+def _create_heading_element(text: str, level: int):
+    """Create a heading paragraph element."""
+    p = OxmlElement("w:p")
+    pPr = OxmlElement("w:pPr")
+    pStyle = OxmlElement("w:pStyle")
+    pStyle.set(qn("w:val"), f"Heading{level}")
+    pPr.append(pStyle)
+    p.append(pPr)
+
+    r = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+    fonts = OxmlElement("w:rFonts")
+    fonts.set(qn("w:ascii"), "Times New Roman")
+    fonts.set(qn("w:hAnsi"), "Times New Roman")
+    fonts.set(qn("w:cs"), "Times New Roman")
+    rPr.append(fonts)
+    if level == 1:
+        b = OxmlElement("w:b")
+        rPr.append(b)
+    r.append(rPr)
+    t = OxmlElement("w:t")
+    t.set(qn("xml:space"), "preserve")
+    t.text = text
+    r.append(t)
+    p.append(r)
+
+    return p
+
+
 def render(app_dir: Path):
     st.title("Editor Document")
-    st.markdown("Încărcați un document și descrieți toate modificările dorite. AI-ul le va aplica într-o singură trecere.")
+    st.markdown(
+        "Încărcați un document și descrieți modificările dorite. "
+        "Editorul va modifica **doar** secțiunile solicitate, păstrând restul documentului intact."
+    )
 
     registry_path = app_dir / "registry.json"
     output_dir = app_dir / "outputs"
@@ -63,24 +264,16 @@ def render(app_dir: Path):
         st.error(f"Eroare la deschiderea documentului: {e}")
         return
 
+    sections = _parse_doc_sections(doc)
+
     st.markdown("---")
     st.subheader("Structura documentului")
 
-    # Extract headings
-    headings = []
-    for i, para in enumerate(doc.paragraphs):
-        if para.style.name.startswith("Heading"):
-            level = int(para.style.name.split()[-1])
-            headings.append({
-                "index": i,
-                "level": level,
-                "title": para.text,
-                "indent": "  " * (level - 1),
-            })
-
-    if headings:
-        for h in headings:
-            st.markdown(f"{h['indent']}{h['title']}")
+    if sections:
+        for sec in sections:
+            indent = "  " * (sec["level"] - 1)
+            para_count = len(sec["paragraphs"])
+            st.markdown(f"{indent}**{sec['heading']}** ({para_count} paragrafe)")
     else:
         st.info("Nu s-au găsit titluri de secțiuni în document.")
 
@@ -91,10 +284,9 @@ def render(app_dir: Path):
     modification = st.text_area(
         "Descrieți toate modificările dorite",
         height=200,
-        help="Descrieți liber ce modificări doriți. Puteți menționa secțiuni specifice, cereri de adăugare/eliminare conținut, etc.",
+        help="Descrieți liber ce modificări doriți. Menționați secțiunile specifice pe care doriți să le modificați.",
         placeholder="Ex: Rescrie secțiunea Concluzii cu accent pe rezultatele practice. "
-                    "Adaugă mai multe detalii în Introducere despre contextul economic actual. "
-                    "Corectează greșelile gramaticale din tot documentul.",
+                    "Adaugă mai multe detalii în Introducere despre contextul economic actual.",
     )
 
     # ─── Reference file uploads ────────────────────────────────────
@@ -113,40 +305,37 @@ def render(app_dir: Path):
             st.error("Niciun provider AI configurat!")
             return
 
-        # Extract full document content
-        full_content = ""
-        for para in doc.paragraphs:
-            if para.style.name.startswith("Heading"):
-                level = int(para.style.name.split()[-1])
-                full_content += f"\n{'#' * level} {para.text}\n\n"
-            elif para.text.strip():
-                full_content += f"{para.text}\n\n"
+        if not sections:
+            st.error("Documentul nu conține secțiuni cu titluri.")
+            return
 
-        # Truncate if too long
-        max_content = 12000
-        if len(full_content) > max_content:
-            full_content = full_content[:max_content] + "\n\n[... conținut trunchiat ...]"
+        # Build section text for AI context
+        section_text = ""
+        for sec in sections:
+            section_text += f"\n=== {sec['heading']} ===\n"
+            for _, para_text in sec["paragraphs"]:
+                section_text += para_text + "\n\n"
+
+        # Truncate if too long (keep first 15000 chars for context)
+        if len(section_text) > 15000:
+            section_text = section_text[:15000] + "\n\n[... conținut trunchiat ...]"
 
         # Extract reference file content
         ref_context = ""
-        saved_refs = []
         if ref_files:
             ref_dir = output_dir / "_editor_temp" / "refs"
             ref_dir.mkdir(parents=True, exist_ok=True)
             for rf in ref_files:
                 ref_path = ref_dir / rf.name
                 ref_path.write_bytes(rf.read())
-                saved_refs.append(ref_path)
                 text = extract_guide_text(ref_path)
                 if text:
                     ref_context += f"\n--- Fișier referință: {rf.name} ---\n{text[:3000]}\n"
 
         with st.spinner("Se aplică modificările..."):
-            prompt = f"""Ai mai jos conținutul complet al unui document academic:
+            prompt = f"""Ai mai jos conținutul unui document academic organizat pe secțiuni:
 
---- DOCUMENT ORIGINAL ---
-{full_content}
---- SFÂRȘIT DOCUMENT ---
+{section_text}
 {f'''
 --- FIȘIERE DE REFERINȚĂ ---
 {ref_context}
@@ -155,71 +344,57 @@ def render(app_dir: Path):
 Instrucțiuni de modificare de la utilizator:
 {modification}
 
-IMPORTANT:
-- Aplică TOATE modificările cerute de utilizator
-- Păstrează structura documentului (titluri cu # pentru H1, ## pentru H2, ### pentru H3)
-- Păstrează stilul academic și tonul formal
-- Păstrează citările existente în format (Autor, An) sau (Autor, An, p. X)
-- NU folosi markdown bold/italic (*text*)
-- Scrie proză academică continuă, fără liste cu bullets
-- Returnează ÎNTREGUL document modificat, nu doar secțiunile schimbate
+REGULI IMPORTANTE:
+1. Returnează DOAR secțiunile pe care le-ai modificat — NU returna secțiunile nemodificate
+2. Folosește EXACT acest format pentru fiecare secțiune modificată:
 
-Scrie documentul modificat complet:"""
+=== MODIFIED: Titlul Exact al Secțiunii ===
+[Conținutul modificat - text simplu, fără markdown]
+=== END ===
+
+3. Titlul secțiunii trebuie să fie EXACT ca în documentul original
+4. Păstrează stilul academic și tonul formal
+5. Păstrează citările existente în format (Autor, An)
+6. NU folosi markdown bold/italic (*text*)
+7. Scrie paragrafe complete separate prin linii goale
+8. Conținutul modificat trebuie să fie cel puțin la fel de lung ca originalul"""
 
             try:
                 new_content, provider_used = generate_text(
                     prompt=prompt,
                     system_prompt=build_system_prompt(provider_list[0]),
                     provider_order=provider_list,
-                    max_tokens=4096,
+                    max_tokens=8192,
                 )
 
-                st.success(f"Modificări aplicate cu {provider_used}")
+                # Parse modified sections from AI output
+                modifications = _parse_ai_modifications(new_content)
 
-                # Show preview of changes
-                with st.expander("Previzualizare conținut modificat", expanded=True):
-                    st.text_area("Conținut nou", value=new_content, height=400, disabled=True)
+                if not modifications:
+                    st.warning(
+                        "AI-ul nu a returnat modificări în formatul așteptat. "
+                        "Încercați să reformulați instrucțiunile."
+                    )
+                    with st.expander("Răspuns AI (debug)"):
+                        st.text_area("Output", value=new_content, height=300, disabled=True)
+                    return
 
-                # Rebuild document
-                builder = AcademicDocBuilder()
-
-                # Parse AI output and rebuild sections
-                lines = new_content.strip().split("\n")
-                current_para = []
-
-                for line in lines:
-                    stripped = line.strip()
-                    if not stripped:
-                        if current_para:
-                            text = " ".join(current_para)
-                            text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
-                            p = builder.doc.add_paragraph(text)
-                            builder._apply_body_format(p)
-                            current_para = []
-                        continue
-
-                    heading_match = re.match(r'^(#{1,3})\s+(.+)$', stripped)
-                    if heading_match:
-                        if current_para:
-                            text = " ".join(current_para)
-                            text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
-                            p = builder.doc.add_paragraph(text)
-                            builder._apply_body_format(p)
-                            current_para = []
-
-                        level = len(heading_match.group(1))
-                        h_text = heading_match.group(2).strip()
-                        builder.doc.add_heading(h_text, level=min(level, 3))
+                # Apply modifications in-place on the loaded document
+                applied = []
+                not_found = []
+                for sec_title, sec_content in modifications.items():
+                    success = _replace_section_in_doc(doc, sec_title, sec_content)
+                    if success:
+                        applied.append(sec_title)
                     else:
-                        stripped = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', stripped)
-                        stripped = re.sub(r'^[-•]\s+', '', stripped)
-                        current_para.append(stripped)
+                        not_found.append(sec_title)
 
-                if current_para:
-                    text = " ".join(current_para)
-                    text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)
-                    p = builder.doc.add_paragraph(text)
-                    builder._apply_body_format(p)
+                if not applied:
+                    st.error("Nu s-a putut aplica nicio modificare — titlurile secțiunilor nu au fost găsite în document.")
+                    with st.expander("Secțiuni returnate de AI"):
+                        for title in not_found:
+                            st.write(f"- {title}")
+                    return
 
                 # Save as new version
                 stem = doc_path.stem
@@ -231,9 +406,16 @@ Scrie documentul modificat complet:"""
                     new_stem = f"{stem}_v2"
 
                 new_path = doc_path.parent / f"{new_stem}.docx"
-                builder.save(new_path)
+                doc.save(str(new_path))
 
-                st.success(f"Document salvat: {new_path.name}")
+                st.success(
+                    f"Modificări aplicate cu succes folosind {provider_used}!\n\n"
+                    f"Secțiuni modificate: {', '.join(applied)}"
+                )
+
+                if not_found:
+                    st.warning(f"Secțiuni negăsite: {', '.join(not_found)}")
+
                 with open(new_path, "rb") as f:
                     st.download_button(
                         "Descarcă documentul modificat",

@@ -259,8 +259,11 @@ class FootnoteFormatter:
 
         Handles Romanian bibliography format: Surname, Firstname [și Surname2, Firstname2],
         Title, [Editura Publisher,] [City,] Year.
+        Also handles AI-generated entries that may not follow Romanian conventions.
         """
         entry = re.sub(r'\*+([^*]+)\*+', r'\1', entry).strip().rstrip('.')
+        # Strip leading numbering like "1.", "2.", etc.
+        entry = re.sub(r'^\d+[\.\)]\s*', '', entry).strip()
 
         # Extract year
         year_match = re.search(r'\b(19\d{2}|20\d{2})\b', entry)
@@ -280,8 +283,6 @@ class FootnoteFormatter:
                 break
 
         # Extract author and title by finding the boundary
-        # Strategy: Everything before the publisher/title starts is author.
-        # The title is typically after the author firstname and before "Editura".
         author = ""
         title = ""
 
@@ -297,11 +298,7 @@ class FootnoteFormatter:
                 before_pub = re.sub(r',?\s*' + re.escape(city) + r'\s*$', '', before_pub, flags=re.IGNORECASE)
             before_pub = before_pub.rstrip(', ')
 
-        # Split author from title: author is "Surname, Firstname [și Surname2, Firstname2]"
-        # followed by the title. The title usually starts with an uppercase letter after a comma
-        # that follows a firstname (not a surname pattern).
-        # Heuristic: find the first comma-separated segment that looks like a title
-        # (longer than 20 chars, or starts with a known title word)
+        # Split author from title using multiple heuristics
         parts = before_pub.split(', ')
         author_parts = []
         title_parts = []
@@ -311,12 +308,11 @@ class FootnoteFormatter:
             p_stripped = p.strip()
             if found_title:
                 title_parts.append(p_stripped)
-            elif i >= 2 and (len(p_stripped) > 25 or
-                             any(p_stripped.lower().startswith(w) for w in
-                                 ["analiza", "contabilitat", "managementul", "studiu", "teoria",
-                                  "economia", "fundamente", "perspectiv", "introducere",
-                                  "drept", "finant", "politici", "diagnostic", "evaluarea",
-                                  "aspecte", "provocar", "dinamica", "contribu"])):
+            elif i >= 2 and (
+                len(p_stripped) > 20 or
+                (' ' in p_stripped and len(p_stripped) > 10) or
+                any(p_stripped.lower().startswith(w) for w in _TITLE_STARTS)
+            ):
                 found_title = True
                 title_parts.append(p_stripped)
             else:
@@ -335,6 +331,8 @@ class FootnoteFormatter:
     def _format_entry(self, entry: str, pages: str | None) -> str:
         """Format a bibliography entry using the selected citation style."""
         clean = re.sub(r'\*+([^*]+)\*+', r'\1', entry).strip().rstrip('. ')
+        # Strip leading numbering
+        clean = re.sub(r'^\d+[\.\)]\s*', '', clean).strip()
 
         # For AR style, use the raw bibliography entry directly (it's already in AR format)
         if isinstance(self.style, AcademiaRomanaStyle):
@@ -344,14 +342,44 @@ class FootnoteFormatter:
 
         # For other styles, parse and reformat
         parsed = self._parse_entry(entry)
-        return self.style.format_footnote(
-            author=parsed["author"],
-            year=parsed["year"],
-            title=parsed["title"],
-            publisher=parsed["publisher"],
-            city=parsed["city"],
-            pages=pages,
-        )
+
+        # If parsing produced meaningful components, use the style formatter
+        if parsed["author"] and (parsed["title"] or parsed["publisher"]):
+            return self.style.format_footnote(
+                author=parsed["author"],
+                year=parsed["year"],
+                title=parsed["title"],
+                publisher=parsed["publisher"],
+                city=parsed["city"],
+                pages=pages,
+            )
+
+        # Fallback: reposition the year to make style visibly different from AR
+        year_match = re.search(r',?\s*((?:19|20)\d{2})\s*\.?\s*$', clean)
+        if year_match:
+            year = year_match.group(1)
+            without_year = clean[:year_match.start()].rstrip(', ')
+            if isinstance(self.style, APAStyle):
+                base = f"{without_year} ({year})."
+                if pages:
+                    base = base.rstrip('.') + f" p. {pages}."
+                return base
+            elif isinstance(self.style, MLAStyle):
+                # MLA: periods between major parts, year at end
+                base = without_year.replace(', ', '. ', 1) + f". {year}."
+                if pages:
+                    base = base.rstrip('.') + f" pp. {pages}."
+                return base
+            elif isinstance(self.style, ChicagoStyle):
+                base = f"{without_year} ({year})."
+                if pages:
+                    base = base.rstrip('.') + f" {pages}."
+                return base
+
+        # Last resort
+        if pages:
+            return f"{clean}, p. {pages}."
+        return f"{clean}."
 
     def _format_generated(self, author: str, year: str, pages: str | None) -> str:
         """Generate a footnote when no bibliography entries exist at all."""
@@ -369,6 +397,22 @@ class FootnoteFormatter:
             pages=pages or str(random.randint(15, 350)),
         )
 
+
+# ─── Title detection words for parser ──────────────────────────────────
+
+_TITLE_STARTS = [
+    "analiza", "contabilitat", "managementul", "studiu", "teoria", "teori",
+    "economia", "economie", "fundamente", "perspectiv", "introducere",
+    "drept", "finant", "finanț", "politici", "diagnostic", "evaluarea",
+    "aspecte", "provocar", "dinamica", "contribu", "impactul",
+    "rolul", "importanța", "influența", "metodologi", "strategi",
+    "sistem", "model", "cadrul", "procesul", "efectele", "mediul",
+    "principii", "practica", "bazele", "elemente", "structur",
+    "organizarea", "planificare", "gestiune", "audit", "control",
+    "raportare", "monograf", "tratament", "abordare", "problematic",
+    "the ", "an ", "a ", "on ", "in ", "for ", "financial", "economic",
+    "accounting", "management", "analysis", "study", "modern", "impact",
+]
 
 # ─── Plausible data for generated footnotes ────────────────────────────
 
