@@ -87,7 +87,10 @@ class GeminiProvider(AIProvider):
         super().__init__("Gemini", key, model)
 
     def generate(self, prompt: str, system_prompt: str = "", max_tokens: int = 4096, temperature: float = 0.7) -> str:
-        import google.generativeai as genai
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            import google.generativeai as genai
         genai.configure(api_key=self.api_key)
         model = genai.GenerativeModel(self.model)
         full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
@@ -228,7 +231,11 @@ def generate_text(
                 errors.append(f"{provider.name} attempt {attempt + 1}: {error_msg}")
                 logger.warning(f"{provider.name} failed: {error_msg}")
                 if "rate" in error_msg.lower() or "429" in error_msg:
-                    break  # Don't retry rate limits, fallback to next provider
+                    # Rate limit: wait and retry instead of immediately giving up
+                    wait_time = 15 * (attempt + 1)  # 15s, 30s
+                    logger.info(f"Rate limited. Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                    continue  # Retry same provider after waiting
                 time.sleep(1)
 
     raise AIProviderError(
@@ -257,6 +264,10 @@ def test_provider(provider_name: str) -> dict:
 
     if not api_key.strip():
         result["error"] = f"Cheia {env_key} nu este configurată în .env"
+        return result
+
+    if provider_name not in PROVIDER_CLASSES:
+        result["error"] = f"Provider '{provider_name}' este dezactivat"
         return result
 
     try:
