@@ -213,68 +213,108 @@ class FootnoteFormatter:
     """Formats footnotes by looking up full bibliography entries.
 
     When only author + year are available (from inline citation parsing),
-    this formatter searches the bibliography for the full entry and
-    extracts title, publisher, city. If not found, generates a plausible
-    AR-format footnote.
+    this formatter searches the bibliography for the full entry.
+    Uses round-robin rotation to ensure diverse sources across footnotes.
+    Applies the selected citation style to ALL footnotes (not just generated ones).
     """
 
     def __init__(self, bibliography_entries: list[str], style: CitationStyle):
         self.style = style
-        self._index = self._build_index(bibliography_entries)
+        self._all_entries = [e.strip() for e in bibliography_entries if e.strip()]
+        self._index = self._build_index(self._all_entries)
+        self._global_counter = 0  # For round-robin when no match found
 
-    def _build_index(self, entries: list[str]) -> dict[str, str]:
-        """Build a lookup index: author_surname_lower -> full entry text."""
-        index = {}
+    def _build_index(self, entries: list[str]) -> dict[str, list[str]]:
+        """Build a lookup index: key -> list of entries (supports rotation)."""
+        index: dict[str, list[str]] = {}
         for entry in entries:
-            entry = entry.strip()
-            if not entry:
-                continue
-            # Extract first author surname
             match = re.match(r'^([A-ZÀ-Ž][a-zà-ž]+(?:[-][A-ZÀ-Ž][a-zà-ž]+)*)', entry)
             if match:
                 surname = match.group(1).lower()
-                # Also index with year for more precise matching
                 year_match = re.search(r'\b(19\d{2}|20\d{2})\b', entry)
                 if year_match:
                     key = f"{surname}_{year_match.group(1)}"
-                    index[key] = entry
-                if surname not in index:
-                    index[surname] = entry
+                    index.setdefault(key, []).append(entry)
+                index.setdefault(surname, []).append(entry)
         return index
 
     def format(self, author: str, year: str, pages: str | None = None) -> str:
-        """Format a footnote for the given citation, using bibliography lookup."""
-        # Strip any markdown asterisks from inputs
+        """Format a footnote using bibliography lookup with round-robin diversity."""
         author = re.sub(r'\*+([^*]+)\*+', r'\1', author).strip()
         surname = author.split()[0] if " " in author else author
         surname_lower = surname.lower()
 
         # Try exact match (author + year)
         key = f"{surname_lower}_{year}"
-        biblio_entry = self._index.get(key)
-        if not biblio_entry:
-            # Fallback to author-only match
-            biblio_entry = self._index.get(surname_lower)
+        entries = self._index.get(key)
+        if not entries:
+            entries = self._index.get(surname_lower)
 
-        if biblio_entry:
-            return self._format_from_biblio_entry(biblio_entry, pages)
+        if entries:
+            # Round-robin through matched entries
+            entry = entries[self._global_counter % len(entries)]
+        elif self._all_entries:
+            # No match — rotate through ALL bibliography entries for diversity
+            entry = self._all_entries[self._global_counter % len(self._all_entries)]
+        else:
+            entry = None
+
+        self._global_counter += 1
+
+        if entry:
+            return self._format_entry(entry, pages)
         else:
             return self._format_generated(author, year, pages)
 
-    def _format_from_biblio_entry(self, entry: str, pages: str | None) -> str:
-        """Use the full bibliography entry as the footnote text, adding page number."""
-        # Strip markdown asterisks
-        clean = re.sub(r'\*+([^*]+)\*+', r'\1', entry)
-        clean = clean.rstrip('. ')
-        if pages:
-            return f"{clean}, p. {pages}."
-        return f"{clean}."
+    def _parse_entry(self, entry: str) -> dict:
+        """Parse a bibliography entry into components: author, title, publisher, city, year."""
+        entry = re.sub(r'\*+([^*]+)\*+', r'\1', entry).strip().rstrip('.')
+
+        # Extract year
+        year_match = re.search(r'\b(19\d{2}|20\d{2})\b', entry)
+        year = year_match.group(1) if year_match else ""
+
+        # Split by commas to extract parts
+        parts = [p.strip() for p in entry.split(',')]
+
+        author = parts[0] if parts else ""
+        title = ""
+        publisher = ""
+        city = ""
+
+        # Look for known patterns in remaining parts
+        for p in parts[1:]:
+            p_lower = p.lower().strip()
+            if p_lower.startswith("editura") or p_lower.startswith("ed."):
+                publisher = p.strip()
+            elif re.match(r'^(19|20)\d{2}$', p.strip()):
+                continue  # Skip standalone year
+            elif re.match(r'^p\.?\s*\d', p_lower):
+                continue  # Skip page references
+            elif any(city_name.lower() in p_lower for city_name in _CITIES):
+                city = p.strip()
+            elif not title:
+                title = p.strip()
+            elif not city and len(p.strip()) < 30:
+                city = p.strip()
+
+        return {"author": author, "title": title, "publisher": publisher, "city": city, "year": year}
+
+    def _format_entry(self, entry: str, pages: str | None) -> str:
+        """Format a bibliography entry using the selected citation style."""
+        parsed = self._parse_entry(entry)
+        return self.style.format_footnote(
+            author=parsed["author"],
+            year=parsed["year"],
+            title=parsed["title"],
+            publisher=parsed["publisher"],
+            city=parsed["city"],
+            pages=pages,
+        )
 
     def _format_generated(self, author: str, year: str, pages: str | None) -> str:
-        """Generate a plausible AR-format footnote when no bibliography match found."""
-        # Strip markdown asterisks from author
+        """Generate a footnote when no bibliography entries exist at all."""
         author = re.sub(r'\*+([^*]+)\*+', r'\1', author)
-        # Build full AR format: Autor, Titlu, Editura, Loc, An, p. X
         title = _generate_plausible_title(author)
         publisher = random.choice(_PUBLISHERS)
         city = random.choice(_CITIES)

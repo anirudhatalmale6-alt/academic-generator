@@ -98,6 +98,11 @@ class GeminiProvider(AIProvider):
                 temperature=temperature,
             ),
         )
+        # Handle Gemini content safety blocks (finish_reason != 1)
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'finish_reason') and candidate.finish_reason != 1:
+                raise Exception(f"Gemini a blocat conținutul (finish_reason={candidate.finish_reason}). Încercați alt provider.")
         return response.text
 
 

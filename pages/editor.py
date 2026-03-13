@@ -131,12 +131,14 @@ def render(app_dir: Path):
     providers = get_available_providers()
     provider_list = list(providers.keys())
 
+    st.warning(f"Secțiunea selectată pentru modificare: **{selected_heading['title']}**")
+
     if st.button("Aplică Modificarea", type="primary", disabled=not modification.strip()):
         if not provider_list:
             st.error("Niciun provider AI configurat!")
             return
 
-        with st.spinner("Se generează conținutul modificat..."):
+        with st.spinner(f"Se regenerează secțiunea '{selected_heading['title']}'..."):
             prompt = f"""Ai mai jos conținutul actual al secțiunii '{selected_heading['title']}':
 
 --- CONȚINUT ACTUAL ---

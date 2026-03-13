@@ -59,8 +59,8 @@ def render(app_dir: Path):
             else:
                 st.write(f"Cheie: Nu este configurată")
         with col3:
-            if api_key:
-                st.success("Configurat")
+            if api_key.strip():
+                st.info("Cheie setată")
             else:
                 st.error("Lipsă")
 

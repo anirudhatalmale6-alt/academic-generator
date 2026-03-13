@@ -213,12 +213,22 @@ class GenerationPipeline:
                 previous_sections=[s["title"] for s in content_sections],
             )
 
+            # Calculate token budget: ~450 tokens/page for Romanian text,
+            # distributed across sections, with buffer to avoid mid-sentence cuts.
+            from core.prompt_builder import calculate_section_length
+            sec_length = calculate_section_length(
+                section["title"], page_count, total_content, detail_level,
+            )
+            # Tokens = estimated_pages * 450 tokens/page * 1.3 safety buffer
+            # Minimum 600 (enough for 2 good paragraphs), maximum 4096
+            section_tokens = max(600, min(4096, int(sec_length["estimated_pages"] * 450 * 1.3)))
+
             try:
                 text, provider_used = generate_text(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     provider_order=provider_order,
-                    max_tokens=4096,
+                    max_tokens=section_tokens,
                     temperature=0.7,
                 )
             except AIProviderError as e:
@@ -443,7 +453,9 @@ class GenerationPipeline:
                     if title and len(title) > 3:
                         sections.append({"title": title, "level": level})
 
-            if sections:
+            # Require at least 3 sections for a valid TOC extraction
+            # (avoids false positives from guide/formatting files)
+            if len(sections) >= 3:
                 return sections
 
         return []

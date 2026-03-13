@@ -55,6 +55,11 @@ def render(app_dir: Path):
         help="Primul provider va fi încercat mai întâi. Dacă eșuează, se trece la următorul.",
     )
 
+    # Warn about providers selected but not configured
+    for p in provider_order:
+        if p not in available_providers:
+            st.sidebar.warning(f"⚠ {p.capitalize()}: Cheie API lipsă — va fi omis!")
+
     # ─── Main Form ─────────────────────────────────────────────────
     with st.form("generation_form"):
         # ─── Document Identification ───────────────────────────────
@@ -105,19 +110,9 @@ def render(app_dir: Path):
                 help="Introduceți structura cuprinsului. Folosiți TAB pentru subcapitole.",
             )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            keywords = st.text_input(
-                "Cuvinte cheie / teme principale",
-                value="",
-                help="Teme și subiecte pe care AI-ul să le acopere",
-            )
-        with col2:
-            detail_level = st.selectbox(
-                "Nivel de detaliu per secțiune",
-                list(DETAIL_MULTIPLIERS.keys()),
-                index=1,
-            )
+        # detail_level uses Standard by default
+        detail_level = "Standard"
+        keywords = ""  # Will be set in Section 6
 
         # ─── Bibliography Settings ─────────────────────────────────
         st.subheader("3. Bibliografie")
@@ -160,6 +155,7 @@ def render(app_dir: Path):
 
         # ─── Author & Academic Metadata ────────────────────────────
         st.subheader("4. Date Autor și Academice")
+        st.caption("Aceste date apar pe pagina de copertă a documentului generat.")
         col1, col2 = st.columns(2)
 
         with col1:
@@ -212,6 +208,11 @@ def render(app_dir: Path):
         # ─── Additional Context ───────────────────────────────────
         st.subheader("6. Context Suplimentar")
 
+        keywords = st.text_input(
+            "Cuvinte cheie / teme principale",
+            value="",
+            help="Teme și subiecte pe care AI-ul să le acopere în conținut",
+        )
         other_details = st.text_area(
             "Alte detalii / cerințe speciale",
             value="",
