@@ -49,11 +49,11 @@ def render(app_dir: Path):
     else:
         st.sidebar.warning("Niciun provider API configurat. Adăugați chei în fișierul .env")
 
-    all_providers = ["claude", "openai", "gemini"]
+    all_providers = ["claude", "openai"]  # Gemini disabled (content safety blocks)
     provider_order = st.sidebar.multiselect(
         "Ordinea providerilor (prioritate)",
         all_providers,
-        default=[p for p in ["claude", "openai", "gemini"] if p in available_providers],
+        default=[p for p in ["claude", "openai"] if p in available_providers],
         help="Primul provider va fi încercat mai întâi. Dacă eșuează, se trece la următorul.",
     )
 

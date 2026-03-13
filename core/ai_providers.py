@@ -139,6 +139,13 @@ class GeminiProvider(AIProvider):
 PROVIDER_CLASSES = {
     "claude": ClaudeProvider,
     "openai": OpenAIProvider,
+    # "gemini": GeminiProvider,  # Disabled — content safety blocks academic content
+}
+
+# Gemini class kept in code for future re-enablement
+_ALL_PROVIDER_CLASSES = {
+    "claude": ClaudeProvider,
+    "openai": OpenAIProvider,
     "gemini": GeminiProvider,
 }
 
@@ -149,7 +156,7 @@ def get_available_providers() -> dict[str, AIProvider]:
     key_map = {
         "claude": "ANTHROPIC_API_KEY",
         "openai": "OPENAI_API_KEY",
-        "gemini": "GEMINI_API_KEY",
+        # "gemini": "GEMINI_API_KEY",  # Disabled
     }
     for name, env_key in key_map.items():
         if os.getenv(env_key, "").strip():

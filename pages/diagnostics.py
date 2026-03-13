@@ -18,7 +18,7 @@ def render(app_dir: Path):
     env_path = app_dir / ".env"
     load_dotenv(env_path)
 
-    # Provider info
+    # Provider info (Gemini disabled — content safety blocks academic content)
     provider_info = {
         "claude": {
             "name": "Anthropic Claude",
@@ -33,13 +33,6 @@ def render(app_dir: Path):
             "model_key": "OPENAI_MODEL",
             "default_model": "gpt-4o-mini",
             "url": "https://platform.openai.com/api-keys",
-        },
-        "gemini": {
-            "name": "Google Gemini",
-            "env_key": "GEMINI_API_KEY",
-            "model_key": "GEMINI_MODEL",
-            "default_model": "gemini-2.0-flash",
-            "url": "https://aistudio.google.com/app/apikey",
         },
     }
 

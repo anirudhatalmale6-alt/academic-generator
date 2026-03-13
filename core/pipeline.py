@@ -159,7 +159,10 @@ class GenerationPipeline:
             sections = [{"title": ch, "level": 1} for ch in default]
 
         # Ensure bibliography section exists
-        has_biblio = any("bibliografi" in s["title"].lower() for s in sections)
+        has_biblio = any(
+            "bibliografi" in s["title"].lower() or "referinț" in s["title"].lower()
+            for s in sections
+        )
         if not has_biblio:
             sections.append({"title": "Bibliografie", "level": 1})
 
@@ -266,8 +269,12 @@ class GenerationPipeline:
         builder = AcademicDocBuilder()
         citation_style = get_style(citation_style_name)
 
-        # Create bibliography-aware footnote formatter
-        fn_formatter = FootnoteFormatter(biblio_entries, citation_style)
+        # Determine citation mode: footnote (AR/Chicago) vs inline (APA/MLA)
+        use_footnotes = citation_style.citation_mode == "footnote"
+        logger.info(f"Citation style: {citation_style.name}, mode: {citation_style.citation_mode}")
+
+        # Create bibliography-aware footnote formatter (only needed for footnote mode)
+        fn_formatter = FootnoteFormatter(biblio_entries, citation_style) if use_footnotes else None
 
         # Cover page
         import datetime
@@ -291,13 +298,13 @@ class GenerationPipeline:
         # Page numbers (from this section onward)
         builder.add_page_numbers()
 
-        # Content sections with footnote injection
+        # Content sections
         for section in content_sections:
             # Add heading and track it
             builder.doc.add_heading(section["title"], level=section["level"])
             builder.track_heading(section["title"], section["level"])
 
-            # Process content paragraph by paragraph, injecting footnotes
+            # Process content paragraph by paragraph
             content = section["content"]
             # Remove duplicate heading if AI repeated it
             content = re.sub(
@@ -325,38 +332,66 @@ class GenerationPipeline:
                 para_text = re.sub(r'^[-•]\s+', '', para_text, flags=re.MULTILINE)
                 para_text = " ".join(para_text.split("\n"))
 
-                # Find citations before adding paragraph
+                # Find citations
                 citations = find_citations(para_text)
 
-                # Remove citation markers from text for clean paragraph
-                clean_text = CITATION_PATTERN.sub('', para_text).strip()
-                # Also strip any remaining parenthetical citations the regex missed
-                clean_text = re.sub(
-                    r'\(\s*[A-ZÀ-Ž][a-zà-ž]+(?:[-\s][A-ZÀ-Ž]?[a-zà-ž]*)*.{0,30}?\d{4}.{0,10}?\)',
-                    '', clean_text,
-                )
-                clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
-
-                if not clean_text:
-                    continue
-
-                p = builder.doc.add_paragraph(clean_text)
-                builder._apply_body_format(p)
-
-                # One footnote per paragraph with exactly one source.
-                # Uses the first citation's page info; the source comes from
-                # round-robin rotation through the full bibliography.
-                if citations:
-                    fn_text = fn_formatter.format(
-                        author=citations[0]["author"],
-                        year=citations[0]["year"],
-                        pages=citations[0]["pages"],
+                if use_footnotes:
+                    # ── FOOTNOTE MODE (AR / Chicago) ──────────────────
+                    # Remove citation markers from text → clean paragraph
+                    clean_text = CITATION_PATTERN.sub('', para_text).strip()
+                    # Also strip any remaining parenthetical citations
+                    clean_text = re.sub(
+                        r'\(\s*[A-ZÀ-Ž][a-zà-ž]+(?:[-\s][A-ZÀ-Ž]?[a-zà-ž]*)*.{0,30}?\d{4}.{0,10}?\)',
+                        '', clean_text,
                     )
-                    builder.add_footnote(p, fn_text)
+                    clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
+
+                    if not clean_text:
+                        continue
+
+                    p = builder.doc.add_paragraph(clean_text)
+                    builder._apply_body_format(p)
+
+                    # One footnote per paragraph with exactly one source
+                    if citations and fn_formatter:
+                        fn_text = fn_formatter.format(
+                            author=citations[0]["author"],
+                            year=citations[0]["year"],
+                            pages=citations[0]["pages"],
+                        )
+                        builder.add_footnote(p, fn_text)
+                else:
+                    # ── INLINE MODE (APA / MLA) ───────────────────────
+                    # Keep citations in text, reformat them according to style.
+                    # NO Word footnotes created.
+                    formatted_text = para_text
+
+                    # Replace citations in reverse order to preserve positions
+                    for cit in reversed(citations):
+                        inline_ref = citation_style.format_inline(
+                            author=cit["author"],
+                            year=cit["year"],
+                            pages=cit["pages"],
+                        )
+                        formatted_text = (
+                            formatted_text[:cit["start"]]
+                            + inline_ref
+                            + formatted_text[cit["end"]:]
+                        )
+
+                    formatted_text = re.sub(r'\s{2,}', ' ', formatted_text).strip()
+
+                    if not formatted_text:
+                        continue
+
+                    p = builder.doc.add_paragraph(formatted_text)
+                    builder._apply_body_format(p)
 
         # Bibliography — strip markdown asterisks from entries
         clean_biblio = [re.sub(r'\*+([^*]+)\*+', r'\1', e) for e in biblio_entries]
-        builder.add_bibliography(clean_biblio)
+        # Use "Referințe bibliografice" for inline styles, "Bibliografie" for footnote styles
+        biblio_title = "Bibliografie" if use_footnotes else "Referințe bibliografice"
+        builder.add_bibliography(clean_biblio, title=biblio_title)
 
         # Save
         safe_title = re.sub(r'[^\w\s-]', '', title)[:50].strip().replace(' ', '_')

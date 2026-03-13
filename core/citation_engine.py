@@ -26,11 +26,21 @@ CITATION_PATTERN = re.compile(
 
 
 class CitationStyle:
-    """Base citation style formatter."""
+    """Base citation style formatter.
+
+    citation_mode: "footnote" = superscript numbers + full citation at page bottom
+                   "inline"   = parenthetical citation in body text, no Word footnotes
+    """
     name: str = ""
+    citation_mode: str = "footnote"  # "footnote" or "inline"
 
     def format_footnote(self, author: str, year: str, title: str = "",
                         publisher: str = "", city: str = "", pages: str | None = None) -> str:
+        """Format a full footnote citation (for footnote-mode styles)."""
+        raise NotImplementedError
+
+    def format_inline(self, author: str, year: str, pages: str | None = None) -> str:
+        """Format an inline parenthetical citation (for inline-mode styles)."""
         raise NotImplementedError
 
     def format_bibliography(self, author: str, year: str, title: str = "",
@@ -41,9 +51,11 @@ class CitationStyle:
 class AcademiaRomanaStyle(CitationStyle):
     """Academia Română — Note de subsol citation style.
 
+    FOOTNOTE MODE: Superscript numbers in text, full citation at bottom of page.
     Format: Autor, Titlu lucrării, Editura, Loc, An, p. X.
     """
     name = "AR (Note de subsol – Academia Română)"
+    citation_mode = "footnote"
 
     def format_footnote(self, author: str, year: str, title: str = "",
                         publisher: str = "", city: str = "", pages: str | None = None) -> str:
@@ -73,11 +85,23 @@ class AcademiaRomanaStyle(CitationStyle):
 
 
 class APAStyle(CitationStyle):
-    """APA 7th edition citation style."""
+    """APA 7th edition citation style.
+
+    INLINE MODE: Parenthetical citations in body text, NO Word footnotes.
+    In-text: (Author, Year) or (Author, Year, p. Page)
+    Full reference only in bibliography at end of document.
+    """
     name = "APA 7th"
+    citation_mode = "inline"
+
+    def format_inline(self, author: str, year: str, pages: str | None = None) -> str:
+        if pages:
+            return f"({author}, {year}, p. {pages})"
+        return f"({author}, {year})"
 
     def format_footnote(self, author: str, year: str, title: str = "",
                         publisher: str = "", city: str = "", pages: str | None = None) -> str:
+        # APA bibliography format (used for References section)
         base = f"{author} ({year})."
         if title:
             base += f" {title}."
@@ -98,8 +122,19 @@ class APAStyle(CitationStyle):
 
 
 class MLAStyle(CitationStyle):
-    """MLA 9th edition citation style."""
+    """MLA 9th edition citation style.
+
+    INLINE MODE: Parenthetical citations in body text, NO Word footnotes.
+    In-text: (Author Page) — no year, just author and page.
+    Full reference only in Works Cited at end of document.
+    """
     name = "MLA 9th"
+    citation_mode = "inline"
+
+    def format_inline(self, author: str, year: str, pages: str | None = None) -> str:
+        if pages:
+            return f"({author} {pages})"
+        return f"({author})"
 
     def format_footnote(self, author: str, year: str, title: str = "",
                         publisher: str = "", city: str = "", pages: str | None = None) -> str:
@@ -119,8 +154,13 @@ class MLAStyle(CitationStyle):
 
 
 class ChicagoStyle(CitationStyle):
-    """Chicago 17th edition citation style."""
+    """Chicago 17th edition — Notes-Bibliography style.
+
+    FOOTNOTE MODE: Superscript numbers in text, full citation at bottom of page.
+    Format: Author, Title (City: Publisher, Year), Page.
+    """
     name = "Chicago 17th"
+    citation_mode = "footnote"
 
     def format_footnote(self, author: str, year: str, title: str = "",
                         publisher: str = "", city: str = "", pages: str | None = None) -> str:
