@@ -1,6 +1,6 @@
 """
 Citation parsing and formatting engine.
-Supports: Academia Română (AR), APA 7th, MLA 9th, Chicago 17th.
+Supports: Academia Română (AR), APA 7th, Chicago 17th.
 
 The AR style requires full footnotes: Autor, Titlu, Editura, Loc, An, p. X.
 When only author/year is available from inline citations, the engine looks up
@@ -198,7 +198,6 @@ class ChicagoStyle(CitationStyle):
 STYLES = {
     "AR (Note de subsol – Academia Română)": AcademiaRomanaStyle(),
     "APA 7th": APAStyle(),
-    "MLA 9th": MLAStyle(),
     "Chicago 17th": ChicagoStyle(),
 }
 
@@ -403,12 +402,6 @@ class FootnoteFormatter:
                 base = f"{without_year} ({year})."
                 if pages:
                     base = base.rstrip('.') + f" p. {pages}."
-                return base
-            elif isinstance(self.style, MLAStyle):
-                # MLA: periods between major parts, year at end
-                base = without_year.replace(', ', '. ', 1) + f". {year}."
-                if pages:
-                    base = base.rstrip('.') + f" pp. {pages}."
                 return base
             elif isinstance(self.style, ChicagoStyle):
                 base = f"{without_year} ({year})."

@@ -10,7 +10,7 @@ from typing import Optional, Callable
 
 from core.ai_providers import generate_text, AIProviderError
 from core.document_builder import AcademicDocBuilder
-from core.citation_engine import find_citations, get_style, CITATION_PATTERN, FootnoteFormatter, MLAStyle
+from core.citation_engine import find_citations, get_style, CITATION_PATTERN, FootnoteFormatter
 from core.bibliography import validate_bibliography, parse_bib_file, search_crossref
 from core.prompt_builder import (
     build_system_prompt, build_section_prompt, build_abstract_prompt,
@@ -276,7 +276,7 @@ class GenerationPipeline:
         builder = AcademicDocBuilder()
         citation_style = get_style(citation_style_name)
 
-        # Determine citation mode: footnote (AR/Chicago) vs inline (APA/MLA)
+        # Determine citation mode: footnote (AR/Chicago) vs inline (APA)
         use_footnotes = citation_style.citation_mode == "footnote"
         logger.info(f"Citation style: {citation_style.name}, mode: {citation_style.citation_mode}")
 
@@ -368,7 +368,7 @@ class GenerationPipeline:
                         )
                         builder.add_footnote(p, fn_text)
                 else:
-                    # ── INLINE MODE (APA / MLA) ───────────────────────
+                    # ── INLINE MODE (APA) ────────────────────────────
                     # Keep citations in text, reformat them according to style.
                     # NO Word footnotes created.
                     formatted_text = para_text
@@ -386,24 +386,12 @@ class GenerationPipeline:
                             + formatted_text[cit["end"]:]
                         )
 
-                    # Secondary cleanup: catch any remaining (Author, Year) that
-                    # the regex missed (truncated, unusual format, etc.)
-                    # For MLA: strip year entirely → (Author)
-                    # For APA: keep as (Author, Year) which is correct APA format
-                    if isinstance(citation_style, MLAStyle):
-                        # Remove ", Year" from any remaining parenthetical citations
-                        formatted_text = re.sub(
-                            r'\(([A-ZÀ-Ž][a-zà-ž]+(?:[-\s][A-ZÀ-Ž]?[a-zà-ž]*)*),?\s*\d{4}[^)]*\)',
-                            r'(\1)',
-                            formatted_text,
-                        )
-                    else:
-                        # APA: clean up broken citations (missing closing paren, etc.)
-                        formatted_text = re.sub(
-                            r'\(([A-ZÀ-Ž][a-zà-ž]+),\s*(\d{4})(?:\s*$)',
-                            r'(\1, \2)',
-                            formatted_text,
-                        )
+                    # APA: clean up broken citations (missing closing paren, etc.)
+                    formatted_text = re.sub(
+                        r'\(([A-ZÀ-Ž][a-zà-ž]+),\s*(\d{4})(?:\s*$)',
+                        r'(\1, \2)',
+                        formatted_text,
+                    )
 
                     formatted_text = re.sub(r'\s{2,}', ' ', formatted_text).strip()
 
